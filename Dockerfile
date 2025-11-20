@@ -1,20 +1,26 @@
-# Use a lightweight Python image
+# Use python slim image
 FROM python:3.9-slim
 
-# Set the working directory inside the container
+# Set working directory
 WORKDIR /app
 
-# Copy the requirements file first to leverage Docker cache
+# --- NEW: Install system dependencies for Scikit-Learn ---
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+# ---------------------------------------------------------
+
+# Copy requirements first
 COPY requirements.txt .
 
-# Install dependencies
+# Install python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code and CSV files
+# Copy the rest of the code
 COPY . .
 
-# Expose the port (Render uses environment variable PORT, default 10000)
+# Expose port
 EXPOSE 10000
 
-# Command to run the application
+# Start the app
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
