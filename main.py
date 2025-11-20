@@ -2,44 +2,57 @@ from fastapi import FastAPI, HTTPException
 import pandas as pd
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-import ast
+import random
 
 app = FastAPI()
 
 # Global variables to hold data in memory
 data_store = {}
 
+def parse_vector(s):
+    """
+    Parses a numpy-style string representation of an array.
+    Input: "[ -1.2   0.63  -0.04 ... ]"
+    Output: np.array([-1.2, 0.63, -0.04, ...])
+    """
+    if not isinstance(s, str):
+        return s
+    
+    # 1. Remove brackets
+    s = s.strip('[]')
+    
+    # 2. Replace newlines with spaces (just in case)
+    s = s.replace('\n', ' ')
+    
+    # 3. Split by whitespace (automatically handles multiple spaces)
+    # 4. Convert to float
+    try:
+        return np.array([float(x) for x in s.split() if x])
+    except ValueError:
+        return np.zeros(1) # Fallback for bad data
+
 @app.on_event("startup")
 def load_data():
-    print("Loading datasets... this may take a moment.")
+    print("Loading datasets...")
     
     # 1. Load Recommendation Data
-    # Assuming columns: 'imdb_id', 'cluster_label_new'
     try:
         df_rec = pd.read_csv("For_recommendation.csv")
-        # Convert to string to ensure matching works
         df_rec['imdb_id'] = df_rec['imdb_id'].astype(str)
-        # Set index for O(1) lookup speed
         data_store['rec_df'] = df_rec.set_index('imdb_id')
-        # Also keep a copy for filtering clusters easily
         data_store['rec_df_reset'] = df_rec 
         print("Recommendation data loaded.")
     except Exception as e:
         print(f"Error loading For_recommendation.csv: {e}")
 
     # 2. Load Vectors Data
-    # Assuming columns: 'imdb_id', 'rounded_vectors'
     try:
         df_vec = pd.read_csv("text_vectors.csv")
         df_vec['imdb_id'] = df_vec['imdb_id'].astype(str)
         
-        # Optimization: Convert the string representation of list "[0.1, 0.2]" 
-        # into actual python lists immediately.
-        # Warning: If dataset is huge, this is slow. 
-        print("Parsing vectors...")
-        df_vec['rounded_vectors'] = df_vec['rounded_vectors'].apply(
-            lambda x: np.array(ast.literal_eval(x)) if isinstance(x, str) else x
-        )
+        print("Parsing vectors (Space-separated format)...")
+        # Apply the new parsing function
+        df_vec['rounded_vectors'] = df_vec['rounded_vectors'].apply(parse_vector)
         
         data_store['vec_df'] = df_vec.set_index('imdb_id')
         print("Vectors data loaded.")
@@ -54,9 +67,6 @@ def home():
 
 @app.get("/recommend")
 def recommend(imdb_id: str):
-    """
-    Endpoint 1: Receives imdb_id, finds its cluster, returns all movies in that cluster.
-    """
     df = data_store.get('rec_df')
     df_full = data_store.get('rec_df_reset')
     
@@ -66,18 +76,25 @@ def recommend(imdb_id: str):
     if imdb_id not in df.index:
         raise HTTPException(status_code=404, detail="IMDB ID not found in recommendation database")
 
-    # 1. Get the cluster label for the requested ID
+    # 1. Get the cluster
     try:
         target_cluster = df.loc[imdb_id, 'cluster_label_new']
     except KeyError:
-        raise HTTPException(status_code=404, detail="ID found but cluster missing")
+        raise HTTPException(status_code=404, detail="Cluster not found")
 
-    # 2. Filter all movies with that cluster
-    # (Using the reset index version for boolean indexing)
-    similar_movies = df_full[df_full['cluster_label_new'] == target_cluster]
-    
-    # Return list of IDs (excluding the input ID if you prefer, currently keeping it)
-    results = similar_movies['imdb_id'].tolist()
+    # 2. Filter movies in the same cluster
+    cluster_movies = df_full[df_full['cluster_label_new'] == target_cluster]
+
+    # 3. Remove the input movie itself
+    cluster_movies = cluster_movies[cluster_movies['imdb_id'] != imdb_id]
+
+    # 4. Select 8 movies
+    if len(cluster_movies) > 8:
+        recommendations = cluster_movies.sample(n=8)
+    else:
+        recommendations = cluster_movies
+
+    results = recommendations['imdb_id'].tolist()
     
     return {
         "input_id": imdb_id,
@@ -89,24 +106,22 @@ def recommend(imdb_id: str):
 
 @app.get("/check_similarity")
 def check_similarity(id1: str, id2: str):
-    """
-    Endpoint 2: Receives 2 IDs, fetches vectors, calculates cosine similarity.
-    """
     df_vec = data_store.get('vec_df')
     
     if df_vec is None:
         raise HTTPException(status_code=500, detail="Vector data not loaded")
 
-    # Check existence
     if id1 not in df_vec.index or id2 not in df_vec.index:
-        raise HTTPException(status_code=404, detail="One or both IMDB IDs not found in vector database")
+        raise HTTPException(status_code=404, detail="IMDB ID not found")
 
-    # 1. Fetch Vectors
+    # Fetch vectors
     vec1 = df_vec.loc[id1, 'rounded_vectors']
     vec2 = df_vec.loc[id2, 'rounded_vectors']
 
-    # 2. Calculate Cosine Similarity
-    # Reshape because sklearn expects 2D arrays
+    # Ensure they are valid arrays before reshaping
+    if isinstance(vec1, (int, float)) or isinstance(vec2, (int, float)):
+         raise HTTPException(status_code=500, detail="Error parsing vector data for these IDs")
+
     vec1 = vec1.reshape(1, -1)
     vec2 = vec2.reshape(1, -1)
     
