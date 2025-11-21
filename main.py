@@ -8,9 +8,8 @@ import asyncio
 app = FastAPI()
 
 # --- CONFIGURATION ---
-# URLs of your other deployed services
+# URL of your independent ID-to-Details service
 TITLE_API_URL = "https://id-to-title.onrender.com/get_title"
-POSTER_API_URL = "https://id-to-poster-api-3.onrender.com/search_movie"
 
 # Global Data Store
 data_store = {}
@@ -34,10 +33,8 @@ def load_data():
     print("Loading datasets...")
     
     # 1. Load Recommendation Clusters
-    # We use specific dtypes to save memory
     try:
         df_rec = pd.read_csv("For_recommendation.csv", dtype={'imdb_id': str})
-        # Convert cluster column to numeric if not already
         if 'cluster_label_new' in df_rec.columns:
              df_rec['cluster_label_new'] = pd.to_numeric(df_rec['cluster_label_new'], errors='coerce')
         
@@ -49,7 +46,6 @@ def load_data():
 
     # 2. Load Vectors
     try:
-        # Only load the columns we need
         df_vec = pd.read_csv("text_vectors.csv", usecols=['imdb_id', 'rounded_vectors'], dtype={'imdb_id': str})
         print("Parsing vectors...")
         df_vec['rounded_vectors'] = df_vec['rounded_vectors'].apply(parse_vector)
@@ -60,41 +56,26 @@ def load_data():
         print(f"CRITICAL ERROR loading text_vectors.csv: {e}")
 
 
-async def fetch_full_movie_details(client, imdb_id):
+async def fetch_movie_details(client, imdb_id):
     """
-    Chain: ID -> Title API -> Poster API -> Result
+    Simply calls the Title API with the ID and returns whatever JSON it gives.
+    It returns {imdb_id, title, cast, poster_path} directly.
     """
-    title = None
-    
-    # Step 1: Get Title
     try:
-        r_title = await client.get(TITLE_API_URL, params={"imdb_id": imdb_id})
-        if r_title.status_code == 200:
-            title = r_title.json().get("title")
-    except Exception:
-        pass # Fail silently, we just won't have a title
+        # Call the external API
+        response = await client.get(TITLE_API_URL, params={"imdb_id": imdb_id})
+        
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 404:
+             return {"imdb_id": imdb_id, "error": "Details not found in database"}
+        else:
+            return {"imdb_id": imdb_id, "error": f"API Error {response.status_code}"}
 
-    if not title:
-        return {"imdb_id": imdb_id, "title": "Unknown", "poster_path": None, "error": "Title not found"}
-
-    # Step 2: Get Poster (using the Title)
-    try:
-        r_poster = await client.get(POSTER_API_URL, params={"query": title})
-        if r_poster.status_code == 200:
-            search_results = r_poster.json()
-            
-            # Step 3: Filter results to find the specific IMDB ID
-            for movie in search_results:
-                if movie.get('imdb_id') == imdb_id:
-                    return movie # Success!
-            
-            # Fallback if API returns movies but none match the ID exactly
-            return {"imdb_id": imdb_id, "title": title, "poster_path": None, "note": "Poster not found matching ID"}
-            
-    except Exception:
-        pass
-
-    return {"imdb_id": imdb_id, "title": title, "poster_path": None}
+    except httpx.TimeoutException:
+        return {"imdb_id": imdb_id, "error": "Request Timed Out"}
+    except Exception as e:
+        return {"imdb_id": imdb_id, "error": str(e)}
 
 
 @app.get("/")
@@ -121,7 +102,8 @@ async def recommend(imdb_id: str):
 
     # 2. Get candidate IDs from that cluster
     cluster_movies = df_full[df_full['cluster_label_new'] == target_cluster]
-    # Remove self
+    
+    # Remove the input movie itself from recommendations
     cluster_movies = cluster_movies[cluster_movies['imdb_id'] != imdb_id]
 
     # 3. Sample 8 movies
@@ -133,10 +115,12 @@ async def recommend(imdb_id: str):
     rec_ids = recommendations_df['imdb_id'].tolist()
 
     # 4. Async Parallel Fetch
-    # We start an async client and fire off 8 requests at once
+    # We call your other API for all 8 IDs at the same time
     enriched_results = []
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        tasks = [fetch_full_movie_details(client, rid) for rid in rec_ids]
+    
+    # Timeout set to 30s to handle Render cold starts
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        tasks = [fetch_movie_details(client, rid) for rid in rec_ids]
         enriched_results = await asyncio.gather(*tasks)
 
     return {
