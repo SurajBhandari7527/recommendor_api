@@ -45,7 +45,7 @@ Dataset used: https://www.kaggle.com/code/chanchal24/tmdb-movies-dataset
    
    Output: text_vectors.csv
 
-Notebook file: 
+Notebook file: Notebooks/vectorization_of_movies.ipynb
 
 ## Clustering technique:
 
@@ -57,7 +57,7 @@ I used clustering, to assign the movies to different clusters where each cluster
 
 Output: For_recommendation.csv
   
-Notebook file:
+Notebook file: Notebooks/clustering_the_movies.ipynb
 
 ## 🛣️ How to use (Endpoints)
 
