@@ -45,8 +45,7 @@ Dataset used: https://www.kaggle.com/code/chanchal24/tmdb-movies-dataset
    
    Output: text_vectors.csv
 
-Notebook file: Notebooks/vectorization_of_movies.ipynb
-
+Notebook file: https://github.com/SurajBhandari7527/recommendor_api/blob/master/Notebooks/vectorization_of_movies.ipynb
 ## Clustering technique:
 
 ### Problem:
@@ -57,7 +56,7 @@ I used clustering, to assign the movies to different clusters where each cluster
 
 Output: For_recommendation.csv
   
-Notebook file: Notebooks/clustering_the_movies.ipynb
+Notebook file: https://github.com/SurajBhandari7527/recommendor_api/blob/master/Notebooks/clustering_the_movies.ipynb
 
 ## 🛣️ How to use (Endpoints)
 
